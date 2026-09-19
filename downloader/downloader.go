@@ -9,9 +9,9 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/cookiejar"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -71,7 +71,7 @@ func decodeSnapApp(args []string) string {
 	}
 
 	eNum, err := strconv.Atoi(e)
-	if err != nil {
+	if err != nil || eNum < 2 || eNum >= len(n) || eNum > 64 {
 		return ""
 	}
 
@@ -322,7 +322,12 @@ func snapsaveDownload(ctx context.Context, mediaURL string, userID int64) (strin
 		return fallbackDownload(ctx, mediaURL, userID, platform)
 	}
 
-	result, err := downloadMedia(ctx, videoURL, outputPath)
+	var result string
+	if platform == TikTok {
+		result, err = downloadTikTokURL(ctx, videoURL, outputPath)
+	} else {
+		result, err = downloadMedia(ctx, videoURL, outputPath)
+	}
 	if err != nil {
 		return fallbackDownload(ctx, mediaURL, userID, platform)
 	}
@@ -345,8 +350,10 @@ func getSnapsaveVideoURL(ctx context.Context, mediaURL string) (string, error) {
 }
 
 func getSnapsaveVideoURLTikTok(ctx context.Context, mediaURL string) (string, error) {
+	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Timeout: 30 * time.Second,
+		Jar:     jar,
 	}
 
 	homeReq, err := http.NewRequestWithContext(ctx, "GET", "https://snaptik.app/", nil)
@@ -674,11 +681,6 @@ func createUserDirectory(userID int64, platform string) (string, error) {
 	uniqueID := generateUniqueID()
 	timestamp := time.Now().UnixNano()
 
-	if platform == "youtube" {
-		outputPath := filepath.Join(userDir, fmt.Sprintf("%s_%d_%s_%d.%%(ext)s", platform, userID, uniqueID, timestamp))
-		return outputPath, nil
-	}
-
 	outputPath := filepath.Join(userDir, fmt.Sprintf("%s_%d_%s_%d.mp4", platform, userID, uniqueID, timestamp))
 	return outputPath, nil
 }
@@ -707,216 +709,8 @@ func DownloadTwitterVideo(ctx context.Context, url string, userID int64) (string
 	return snapsaveDownload(ctx, url, userID)
 }
 
-func DownloadTikTokVideo(ctx context.Context, url string, userID int64) (string, error) {
-	return snapsaveDownload(ctx, url, userID)
-}
-
 func DownloadFacebookVideo(ctx context.Context, url string, userID int64) (string, error) {
 	return snapsaveDownload(ctx, url, userID)
-}
-
-func DownloadYouTubeVideo(ctx context.Context, url string, userID int64) (string, error) {
-	outputPath, err := createUserDirectory(userID, "youtube")
-	if err != nil {
-		return "", fmt.Errorf("error creating directory: %v", err)
-	}
-
-	if err := checkYtDlpAvailability(); err != nil {
-		return "", fmt.Errorf("yt-dlp is unavailable: %v", err)
-	}
-
-	args := []string{
-		"--max-filesize", "50M",
-		"--no-playlist",
-		"--merge-output-format", "mp4",
-		"--no-cache-dir",
-		"--abort-on-error",
-		"--output", outputPath,
-		url,
-	}
-
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-
-	workDir, err := os.Getwd()
-	if err != nil {
-		workDir = "."
-	}
-	cmd.Dir = workDir
-
-	cmd.Env = append(os.Environ(),
-		"XDG_CACHE_HOME="+filepath.Join(workDir, "temp_videos", ".cache"),
-		"XDG_CONFIG_HOME="+filepath.Join(workDir, "temp_videos", ".config"),
-		"HOME="+workDir,
-	)
-
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
-	stdoutStr := stdout.String()
-	stderrStr := stderr.String()
-
-	if runErr != nil {
-		fmt.Printf("yt-dlp failed: %v\nStdout: %s\nStderr: %s\n", runErr, stdoutStr, stderrStr)
-
-		if strings.Contains(stderrStr, "Video unavailable") {
-			return "", fmt.Errorf("video is unavailable (possibly deleted or private)")
-		}
-		if strings.Contains(stderrStr, "Private video") {
-			return "", fmt.Errorf("video is private")
-		}
-		if strings.Contains(stderrStr, "Sign in to confirm your age") {
-			return "", fmt.Errorf("video has age restrictions")
-		}
-		if strings.Contains(stderrStr, "This video is not available") {
-			return "", fmt.Errorf("video is not available in your region")
-		}
-		if strings.Contains(stderrStr, "Requested format is not available") {
-			return "", fmt.Errorf("requested format is not available")
-		}
-		if strings.Contains(stderrStr, "Sign in to confirm") || strings.Contains(stderrStr, "not a bot") {
-			return "", fmt.Errorf("YouTube requires authorization (bot detection), please try again later")
-		}
-		if strings.Contains(stderrStr, "Unable to extract") || strings.Contains(stderrStr, "Incomplete data") {
-			return "", fmt.Errorf("unable to extract video data — yt-dlp may be outdated")
-		}
-
-		return "", fmt.Errorf("error downloading YouTube Shorts (exit: %v)", runErr)
-	}
-
-	if strings.Contains(stderrStr, "File is larger than max-filesize") {
-		return "", fmt.Errorf("file exceeds size limit (50MB)")
-	}
-	if strings.Contains(stderrStr, "Requested format is not available") {
-		return "", fmt.Errorf("suitable video format not found (all versions may be too large)")
-	}
-	if strings.Contains(stdoutStr, "aborting") || strings.Contains(stderrStr, "aborting") {
-		return "", fmt.Errorf("download aborted (possibly due to exceeding file size limit)")
-	}
-
-	fmt.Printf("yt-dlp completed successfully. Stdout: %s\n", stdoutStr)
-
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		// yt-dlp may create a file with a different name, search all files in directory
-		dir := filepath.Dir(outputPath)
-		files, err := os.ReadDir(dir)
-		if err != nil {
-			return "", fmt.Errorf("file was not created and failed to read directory: %v", err)
-		}
-
-		// Log directory contents for debugging
-		var fileList []string
-		for _, file := range files {
-			if !file.IsDir() {
-				fileList = append(fileList, file.Name())
-			}
-		}
-
-		// First, look for files matching our base name
-		baseName := strings.TrimSuffix(filepath.Base(outputPath), ".mp4")
-		for _, file := range files {
-			if strings.HasPrefix(file.Name(), baseName) && !file.IsDir() {
-				// Found file matching our base name
-				actualPath := filepath.Join(dir, file.Name())
-
-				// If not mp4, rename to mp4 for Telegram compatibility
-				if !strings.HasSuffix(file.Name(), ".mp4") {
-					newPath := strings.TrimSuffix(actualPath, filepath.Ext(actualPath)) + ".mp4"
-					if err := os.Rename(actualPath, newPath); err == nil {
-						return newPath, nil
-					}
-				}
-				return actualPath, nil
-			}
-		}
-
-		// Clean up .part files (incomplete downloads)
-		partFilesFound := false
-		for _, file := range files {
-			if !file.IsDir() && strings.HasSuffix(file.Name(), ".part") {
-				partFilePath := filepath.Join(dir, file.Name())
-				if err := os.Remove(partFilePath); err == nil {
-					fmt.Printf("Removed incomplete file: %s\n", partFilePath)
-					partFilesFound = true
-				}
-			}
-		}
-
-		// If .part files are found, the download was interrupted
-		if partFilesFound {
-			return "", fmt.Errorf("download was interrupted, only partial files were created (size limit or timeout may have been reached)")
-		}
-
-		// If not found by base name, look for any recently created video files
-		now := time.Now()
-		for _, file := range files {
-			if file.IsDir() {
-				continue
-			}
-
-			// Check video extensions (excluding .part files)
-			fileName := file.Name()
-			if !strings.HasSuffix(fileName, ".part") &&
-				(strings.HasSuffix(fileName, ".mp4") || strings.HasSuffix(fileName, ".webm") ||
-					strings.HasSuffix(fileName, ".mkv") || strings.HasSuffix(fileName, ".avi")) {
-
-				filePath := filepath.Join(dir, fileName)
-				fileInfo, err := os.Stat(filePath)
-				if err != nil {
-					continue
-				}
-
-				// If file was created in the last 5 minutes, consider it ours
-				if now.Sub(fileInfo.ModTime()) < 5*time.Minute {
-					// Rename to expected format
-					newPath := strings.TrimSuffix(outputPath, ".%(ext)s") + ".mp4"
-					if strings.Contains(outputPath, ".%(ext)s") {
-						if err := os.Rename(filePath, newPath); err == nil {
-							return newPath, nil
-						}
-					}
-					return filePath, nil
-				}
-			}
-		}
-
-		return "", fmt.Errorf("file was not created after yt-dlp execution. Files in directory: %v", fileList)
-	}
-
-	// Check file size
-	fileInfo, err := os.Stat(outputPath)
-	if err != nil {
-		return "", fmt.Errorf("error retrieving file information: %v", err)
-	}
-
-	// Verify file is not too large for Telegram (50MB limit)
-	const maxFileSize = 50 * 1024 * 1024 // 50MB
-	if fileInfo.Size() > maxFileSize {
-		os.Remove(outputPath) // Remove file that is too large
-		return "", fmt.Errorf("file is too large to send via Telegram (%.1f MB > 50 MB)", float64(fileInfo.Size())/(1024*1024))
-	}
-
-	// Verify file is not empty
-	if fileInfo.Size() < 1024 { // Minimum 1KB
-		os.Remove(outputPath)
-		return "", fmt.Errorf("downloaded file is too small (possible download error)")
-	}
-
-	return outputPath, nil
-}
-
-// checkYtDlpAvailability checks availability of yt-dlp
-func checkYtDlpAvailability() error {
-	cmd := exec.Command("yt-dlp", "--version")
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("yt-dlp is not installed or unavailable: %v", err)
-	}
-
-	// Log version for diagnostics
-	fmt.Printf("yt-dlp version: %s\n", strings.TrimSpace(string(output)))
-	return nil
 }
 
 // fallbackInstagramDownload fallback method for Instagram
@@ -1133,7 +927,7 @@ func fallbackTikTokDownload(ctx context.Context, url string, userID int64) (stri
 		return "", fmt.Errorf("tikmate.online could not process URL")
 	}
 
-	return downloadMedia(ctx, response.Data.VideoURL, outputPath)
+	return downloadTikTokURL(ctx, response.Data.VideoURL, outputPath)
 }
 
 // fallbackTikTokRegexExtract extracts video URL using regular expressions
@@ -1155,7 +949,7 @@ func fallbackTikTokRegexExtract(ctx context.Context, htmlContent string, outputP
 			videoURL = strings.ReplaceAll(videoURL, "\\u0026", "&")
 			videoURL = strings.ReplaceAll(videoURL, "\\/", "/")
 
-			return downloadMedia(ctx, videoURL, outputPath)
+			return downloadTikTokURL(ctx, videoURL, outputPath)
 		}
 	}
 

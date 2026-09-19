@@ -29,9 +29,9 @@ import (
 var (
 	instagramRegex = regexp.MustCompile(`^https?://(?:www\.)?instagram\.com/(?:p|reel|reels|tv|stories|share)/([^/?#&]+).*`)
 	twitterRegex   = regexp.MustCompile(`^https://(?:x|twitter)\.com(?:/(?:i/web|[^/]+)/status/(\d+)(?:.*)?)?$`)
-	tiktokRegex    = regexp.MustCompile(`^https?://(?:www\.|m\.|vm\.|vt\.)?tiktok\.com/(?:@[^/]+/(?:video|photo)/\d+|v/\d+|t/[\w]+|[\w]+)/?`)
+	tiktokRegex    = regexp.MustCompile(`^https?://(?:www\.|m\.|vm\.|vt\.)?tiktok\.com/(?:@[^/\s]+/(?:video|photo)/\d+|v/\d+|t/[\w]+|[\w]+)/?(?:[?#][^\s]*)?$`)
 	facebookRegex  = regexp.MustCompile(`^https?://(?:www\.|web\.|m\.)?facebook\.com/(?:watch\?v=[0-9]+|watch/\?v=[0-9]+|reel/[0-9]+|[a-zA-Z0-9.\-_]+/(?:videos|posts)/[0-9]+|[0-9]+/(?:videos|posts)/[0-9]+|share/(?:v|r)/[a-zA-Z0-9]+)(?:[^/?#&]+.*)?$|^https://fb\.watch/[a-zA-Z0-9]+$`)
-	youtubeRegex   = regexp.MustCompile(`^(?:https?://)?(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})(?:\S+)?$`)
+	youtubeRegex   = regexp.MustCompile(`^(?:https?://)?(?:(?:www|m)\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})/?(?:[?#][^\s]*)?$`)
 
 	_userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
@@ -55,9 +55,9 @@ func main() {
 	adminID, _ = strconv.ParseInt(os.Getenv("BOT_ADMIN_ID"), 10, 64)
 
 	if err := checkYtDlpAvailability(); err != nil {
-		log.Printf("Warning: yt-dlp is unavailable, YouTube functionality will be disabled: %v", err)
+		log.Printf("Warning: YouTube and direct TikTok downloads require yt-dlp: %v", err)
 	} else {
-		log.Println("yt-dlp detected, YouTube functionality enabled")
+		log.Println("yt-dlp detected, YouTube and direct TikTok downloads enabled")
 	}
 
 	downloadSemaphore = make(chan struct{}, *maxConcurrentDownloads)
@@ -163,7 +163,6 @@ func setupBotCommands(bot *tgbotapi.BotAPI) {
 	}
 }
 
-
 func isJustLink(text string, regex *regexp.Regexp) bool {
 	trimmedText := strings.TrimSpace(text)
 
@@ -176,6 +175,7 @@ func isJustLink(text string, regex *regexp.Regexp) bool {
 }
 
 func extractLink(text string) string {
+	text = strings.TrimSpace(text)
 	instagramMatches := instagramRegex.FindStringSubmatch(text)
 	if len(instagramMatches) > 0 {
 		return instagramMatches[0]
@@ -619,9 +619,5 @@ func cleanupAllTempFiles() {
 }
 
 func checkYtDlpAvailability() error {
-	cmd := exec.Command("yt-dlp", "--version")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("yt-dlp is not installed or unavailable: %v", err)
-	}
-	return nil
+	return downloader.CheckYtDlpAvailability(context.Background())
 }

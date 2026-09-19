@@ -34,9 +34,8 @@ export PATH=$PATH:/usr/local/go/bin
 
 # Installation parameters
 APP_NAME="videosaverbot"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CURRENT_GIT_URL="$(git -C "$SCRIPT_DIR" config --get remote.origin.url 2>/dev/null || true)"
-REPO_URL="${REPO_URL:-${CURRENT_GIT_URL:-https://github.com/memrook/VideoSaverBot.git}}"
+SCRIPT_DIR="$(dirname -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd -- "$SCRIPT_DIR" && pwd)"
 INSTALL_DIR="/opt/$APP_NAME"
 SERVICE_USER="videosaverbot"
 CONFIG_DIR="/etc/$APP_NAME"
@@ -73,39 +72,9 @@ if ! command -v go >/dev/null 2>&1; then
     fi
 fi
 
-# Install yt-dlp for downloading YouTube videos
-print_message "Checking and installing yt-dlp..."
-if ! command -v yt-dlp >/dev/null 2>&1; then
-    print_warning "yt-dlp is not installed. Installing..."
-    # Install pip if not present
-    if ! command -v pip3 >/dev/null 2>&1; then
-        apt-get install -y python3-pip
-    fi
-    
-    # Install yt-dlp via pip
-    pip3 install yt-dlp
-    
-    # Verify installation
-    if command -v yt-dlp >/dev/null 2>&1; then
-        YT_DLP_VERSION=$(yt-dlp --version)
-        print_message "yt-dlp installed, version: $YT_DLP_VERSION"
-    else
-        print_error "Failed to install yt-dlp"
-        exit 1
-    fi
-else
-    YT_DLP_VERSION=$(yt-dlp --version)
-    print_message "yt-dlp is already installed, version: $YT_DLP_VERSION"
-fi
-
-# Install ffmpeg for video processing (if needed)
-print_message "Checking and installing ffmpeg..."
-if ! command -v ffmpeg >/dev/null 2>&1; then
-    print_warning "ffmpeg is not installed. Installing..."
-    apt-get install -y ffmpeg
-else
-    print_message "ffmpeg is already installed"
-fi
+# Update yt-dlp, JavaScript support, ffmpeg, and the local anonymous token helper.
+print_message "Installing current download dependencies..."
+bash "$SCRIPT_DIR/setup-downloads.sh"
 
 # Check Go version
 GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
@@ -120,22 +89,23 @@ print_message "Creating application directories..."
 mkdir -p $INSTALL_DIR
 mkdir -p $CONFIG_DIR
 
-# Clone repository
-print_message "Cloning repository from GitHub..."
-if [ -d "$INSTALL_DIR/.git" ]; then
-    print_warning "Repository already exists. Updating..."
-    cd $INSTALL_DIR
-    git pull
-else
-    git clone $REPO_URL $INSTALL_DIR
-    cd $INSTALL_DIR
+# Deploy the source that was actually reviewed/edited, including local fixes.
+print_message "Installing source from $SCRIPT_DIR..."
+if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
+    install -m 644 "$SCRIPT_DIR/main.go" "$SCRIPT_DIR/go.mod" "$SCRIPT_DIR/go.sum" "$INSTALL_DIR/"
+    mkdir -p "$INSTALL_DIR/downloader"
+    install -m 644 "$SCRIPT_DIR"/downloader/*.go "$INSTALL_DIR/downloader/"
+    install -m 644 "$SCRIPT_DIR/README.md" "$SCRIPT_DIR/download-requirements.txt" "$INSTALL_DIR/"
+    install -m 755 "$SCRIPT_DIR/deploy.sh" "$SCRIPT_DIR/setup-downloads.sh" "$INSTALL_DIR/"
 fi
 
 # Install Go dependencies
 print_message "Installing Go dependencies..."
 cd $INSTALL_DIR
-go mod tidy
-go build -o $APP_NAME
+go mod download
+# Write a separate file first so deployment also works while the old binary runs.
+go build -o "$APP_NAME.new"
+mv -f "$APP_NAME.new" "$APP_NAME"
 
 # Create token configuration file
 if [ ! -f "$TOKEN_FILE" ]; then
@@ -211,4 +181,4 @@ else
     print_message "Don't forget to add the token to $TOKEN_FILE before starting the bot!"
 fi
 
-exit 0 
+exit 0
