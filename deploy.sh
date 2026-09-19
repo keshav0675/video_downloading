@@ -104,7 +104,9 @@ print_message "Installing Go dependencies..."
 cd $INSTALL_DIR
 go mod download
 # Write a separate file first so deployment also works while the old binary runs.
-go build -o "$APP_NAME.new"
+# Deployment copies source files and may encounter an old or differently owned
+# Git checkout in INSTALL_DIR. Building the bot does not require VCS metadata.
+go build -buildvcs=false -o "$APP_NAME.new"
 mv -f "$APP_NAME.new" "$APP_NAME"
 
 # Create token configuration file
@@ -163,16 +165,28 @@ print_message "  Status:               sudo systemctl status $APP_NAME"
 print_message "  View logs:            sudo journalctl -u $APP_NAME -f"
 
 # Prompt to add token
-read -p "Do you want to add the Telegram bot token now? (y/n): " ADD_TOKEN
+read -r -p "Do you want to add the Telegram bot token now? (y/n): " ADD_TOKEN
 
 if [ "$ADD_TOKEN" = "y" ] || [ "$ADD_TOKEN" = "Y" ]; then
-    read -p "Enter Telegram bot token: " BOT_TOKEN
-    sed -i "s/TELEGRAM_BOT_TOKEN=/TELEGRAM_BOT_TOKEN=$BOT_TOKEN/" $TOKEN_FILE
+    read -r -s -p "Enter Telegram bot token (input hidden): " BOT_TOKEN
+    printf '\n'
+    if [[ ! "$BOT_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+        print_error "Invalid token format. Copy only the bot token from BotFather; the saved token was not changed."
+        exit 1
+    fi
+    # Replace the entire value: replacing only the key prepends the new token
+    # to the old one when deployment is rerun, preventing Telegram login.
+    if grep -qE '^[[:space:]]*TELEGRAM_BOT_TOKEN=' "$TOKEN_FILE"; then
+        sed -i "s/^[[:space:]]*TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=$BOT_TOKEN/" "$TOKEN_FILE"
+    else
+        printf 'TELEGRAM_BOT_TOKEN=%s\n' "$BOT_TOKEN" >> "$TOKEN_FILE"
+    fi
+    unset BOT_TOKEN
     print_message "Token added to configuration file."
     
-    read -p "Start the service now? (y/n): " START_SERVICE
+    read -r -p "Start the service now? (y/n): " START_SERVICE
     if [ "$START_SERVICE" = "y" ] || [ "$START_SERVICE" = "Y" ]; then
-        systemctl start $APP_NAME.service
+        systemctl restart $APP_NAME.service
         print_message "Service started! Check status: sudo systemctl status $APP_NAME"
     else
         print_message "You can start the service later with: sudo systemctl start $APP_NAME"
