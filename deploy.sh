@@ -30,37 +30,46 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+export PATH=$PATH:/usr/local/go/bin
+
 # Installation parameters
 APP_NAME="videosaverbot"
-REPO_URL="https://github.com/memrook/VideoSaverBot.git"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CURRENT_GIT_URL="$(git -C "$SCRIPT_DIR" config --get remote.origin.url 2>/dev/null || true)"
+REPO_URL="${REPO_URL:-${CURRENT_GIT_URL:-https://github.com/memrook/VideoSaverBot.git}}"
 INSTALL_DIR="/opt/$APP_NAME"
 SERVICE_USER="videosaverbot"
-TOKEN_FILE="/etc/$APP_NAME/token.conf"
 CONFIG_DIR="/etc/$APP_NAME"
+TOKEN_FILE="$CONFIG_DIR/token.conf"
 CONCURRENT_DOWNLOADS=5
 DEBUG_MODE="false"
+
+# Ensure config and install directories exist immediately
+mkdir -p "$CONFIG_DIR"
+mkdir -p "$INSTALL_DIR"
 
 print_message "Starting VideoSaverBot installation on the server..."
 
 # Check for required utilities
 print_message "Checking for required utilities..."
 command -v git >/dev/null 2>&1 || { print_error "git is required. Installing..."; apt-get update && apt-get install -y git; }
+command -v curl >/dev/null 2>&1 || { apt-get update && apt-get install -y curl; }
 
 # Check and install Go
 print_message "Checking for Go..."
 if ! command -v go >/dev/null 2>&1; then
     print_warning "Go is not installed. Installing Go..."
     apt-get update
-    apt-get install -y golang
+    apt-get install -y golang-go || apt-get install -y golang || true
     
     if ! command -v go >/dev/null 2>&1; then
-        print_error "Failed to install Go via apt. Installing from official repository..."
-        wget https://go.dev/dl/go1.21.3.linux-amd64.tar.gz
-        rm -rf /usr/local/go && tar -C /usr/local -xzf go1.21.3.linux-amd64.tar.gz
+        print_error "apt package not available. Installing official Go binary..."
+        curl -fsSL https://go.dev/dl/go1.22.6.linux-amd64.tar.gz -o /tmp/go.tar.gz
+        rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tar.gz
+        rm -f /tmp/go.tar.gz
         echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
         chmod +x /etc/profile.d/go.sh
-        source /etc/profile.d/go.sh
-        rm go1.21.3.linux-amd64.tar.gz
+        export PATH=$PATH:/usr/local/go/bin
     fi
 fi
 
