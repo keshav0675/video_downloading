@@ -24,7 +24,7 @@ Telegram bot in Go for downloading videos from popular social networks by URL.
 | Instagram | snapsave.app | DDInstagram |
 | Twitter/X | twitterdownloader.snapsave.app | VXTwitter |
 | TikTok | yt-dlp with browser impersonation support | TikWM, then snaptik.app / tikmate.online |
-| Facebook | snapsave.app | — |
+| Facebook | snapsave.app | Direct yt-dlp extraction |
 | YouTube Shorts | yt-dlp default clients | Mobile web client with automatic PO tokens |
 
 ## Installation
@@ -32,7 +32,7 @@ Telegram bot in Go for downloading videos from popular social networks by URL.
 ### Dependencies
 
 - Go 1.21+
-- Python 3.10+ and current `yt-dlp[default,curl-cffi]` — for YouTube and direct TikTok downloads
+- Python 3.10+ and current `yt-dlp[default,curl-cffi]` — for YouTube, direct TikTok downloads, and the Facebook fallback
 - Deno 2.3+ — runs YouTube's JavaScript challenges
 - `bgutil-ytdlp-pot-provider` plus its matching local token helper — automatically supplies anonymous YouTube PO tokens
 - `ffmpeg` and `ffprobe` — combine audio/video, produce MP4, and detect dimensions
@@ -65,7 +65,7 @@ Environment Variables:
 | `YTDLP_PATH` | Optional full path to the yt-dlp executable (default: `yt-dlp` on PATH) |
 | `YTDLP_JS_RUNTIME` | Optional runtime/path, e.g. `deno:/opt/videosaverbot-tools/venv/bin/deno`. Otherwise Deno is used, or Node on PATH if Deno is absent; Node must be 22+ |
 | `YTDLP_POT_BASE_URL` | Optional token-helper URL (default used by the plugin: `http://127.0.0.1:4416`) |
-| `YTDLP_PROXY` | Optional operator-supplied HTTP/SOCKS proxy for yt-dlp's YouTube and TikTok requests; use only if the server connection is blocked |
+| `YTDLP_PROXY` | Optional operator-supplied HTTP/SOCKS proxy for yt-dlp's YouTube, TikTok, and Facebook requests; use only if the server connection is blocked |
 
 ### Server Deployment (systemd)
 
@@ -122,6 +122,12 @@ The setup follows yt-dlp's [JavaScript runtime guide](https://github.com/yt-dlp/
 
 For diagnosis, check `journalctl -u videosaverbot -u videosaverbot-pot -f`. If dependencies are outdated, rerun `setup-downloads.sh`. Downloads must finish within three minutes and fit Telegram's 50 MB limit. Each yt-dlp attempt uses its own temporary directory; only its reported completed MP4 is returned, and incomplete files are removed.
 
+Facebook keeps SnapSave as its primary method, limited to 70 seconds so a stalled
+request cannot consume the entire download timeout. If lookup or download fails,
+the bot logs the original error and tries yt-dlp directly for up to 90 seconds.
+The fallback does not use cookies and accepts progressive MP4 streams with missing
+resolution metadata. Private or login-restricted videos may still be unavailable.
+
 Service Management:
 
 ```bash
@@ -158,7 +164,7 @@ In group chats, the bot only responds to clean links, @mentions, or commands.
 ```
 main.go                    — entry point, routing, semaphore, graceful shutdown
 downloader/downloader.go   — existing platform scrapers and HTTP downloads
-downloader/ytdlp.go        — cookie-free YouTube/TikTok downloads, retries, output validation
+downloader/ytdlp.go        — cookie-free YouTube/TikTok downloads and Facebook fallback
 downloader/tikwm.go        — TikTok API fallback and MP4 validation
 go.mod / go.sum            — dependencies
 deploy.sh                  — Ubuntu server deployment script
@@ -187,6 +193,13 @@ download works, run `go test ./downloader -run TestLiveYouTubeTokenFallback -v -
 with `TEST_YOUTUBE_SHORTS_URL` set and the local token helper running. This forces a
 simulated failure of the primary method, then performs a real fallback download;
 it does not reproduce or prove removal of an AWS IP restriction.
+
+To test Facebook's direct fallback independently of SnapSave:
+
+```bash
+TEST_FACEBOOK_URL='https://www.facebook.com/PAGE/videos/VIDEO_ID/' \
+go test ./downloader -run TestLiveFacebookFallback -v -count=1
+```
 
 ## License
 

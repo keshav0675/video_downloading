@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/http/cookiejar"
@@ -311,14 +312,24 @@ func detectPlatform(mediaURL string) PlatformType {
 
 func snapsaveDownload(ctx context.Context, mediaURL string, userID int64) (string, error) {
 	platform := detectPlatform(mediaURL)
+	primaryCtx := ctx
+	if platform == Facebook {
+		// Leave time for the direct fallback within the bot's three-minute limit.
+		var cancel context.CancelFunc
+		primaryCtx, cancel = context.WithTimeout(ctx, 70*time.Second)
+		defer cancel()
+	}
 
 	outputPath, err := createUserDirectory(userID, string(platform))
 	if err != nil {
 		return "", err
 	}
 
-	videoURL, err := getSnapsaveVideoURL(ctx, mediaURL)
+	videoURL, err := getSnapsaveVideoURL(primaryCtx, mediaURL)
 	if err != nil {
+		if platform == Facebook {
+			log.Printf("Facebook SnapSave lookup failed, trying yt-dlp: %v", err)
+		}
 		return fallbackDownload(ctx, mediaURL, userID, platform)
 	}
 
@@ -326,9 +337,13 @@ func snapsaveDownload(ctx context.Context, mediaURL string, userID int64) (strin
 	if platform == TikTok {
 		result, err = downloadTikTokURL(ctx, videoURL, outputPath)
 	} else {
-		result, err = downloadMedia(ctx, videoURL, outputPath)
+		result, err = downloadMedia(primaryCtx, videoURL, outputPath)
 	}
 	if err != nil {
+		if platform == Facebook {
+			os.Remove(outputPath)
+			log.Printf("Facebook SnapSave media failed, trying yt-dlp: %v", err)
+		}
 		return fallbackDownload(ctx, mediaURL, userID, platform)
 	}
 	return result, nil
@@ -956,11 +971,13 @@ func fallbackTikTokRegexExtract(ctx context.Context, htmlContent string, outputP
 	return "", fmt.Errorf("failed to find video URL in fallback mode for TikTok")
 }
 
-// fallbackFacebookDownload fallback method for Facebook (simple approach)
+// fallbackFacebookDownload extracts public videos directly when SnapSave fails.
 func fallbackFacebookDownload(ctx context.Context, url string, userID int64) (string, error) {
-	// For Facebook, currently return an error as fallback methods are complex
-	// Alternative APIs can be added in the future
-	return "", fmt.Errorf("facebook fallback method is not yet implemented - please try again later")
+	outputPath, err := createUserDirectory(userID, "facebook")
+	if err != nil {
+		return "", err
+	}
+	return downloadFacebookYtDlp(ctx, url, outputPath, runYtDlp)
 }
 
 // downloadMedia downloads media by URL and saves it to outputPath

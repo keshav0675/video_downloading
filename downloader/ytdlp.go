@@ -98,14 +98,19 @@ func classifyYtDlpFailure(output, platform string) error {
 	}
 }
 
-func ytDlpArgs(mediaURL, template, manifest, playerClient string) []string {
+func ytDlpArgs(mediaURL, template, manifest, platform, playerClient string) []string {
+	format := "bv[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/bv[ext=mp4][height<=1080]+ba[ext=m4a]"
+	if platform == "Facebook" {
+		// Facebook's progressive MP4 streams can omit their resolution.
+		format = strings.ReplaceAll(format, "height<=1080", "height<=?1080")
+	}
 	args := []string{
 		"--ignore-config", // Never inherit browser-cookie or account settings.
 		"--no-playlist", "--no-progress", "--no-colors", "--no-simulate",
 		"--no-cache-dir", "--socket-timeout", "15",
 		"--retries", "1", "--extractor-retries", "1", "--fragment-retries", "1",
 		"--abort-on-unavailable-fragments", "--max-filesize", "50M",
-		"--format", "bv[ext=mp4][vcodec^=avc1][height<=1080]+ba[ext=m4a]/b[ext=mp4][height<=1080]/bv[ext=mp4][height<=1080]+ba[ext=m4a]",
+		"--format", format,
 		"--merge-output-format", "mp4", "--remux-video", "mp4",
 		"--output", template, "--print-to-file", "after_move:filepath", manifest,
 	}
@@ -181,7 +186,7 @@ func downloadYtDlpAttempt(ctx context.Context, mediaURL, outputPath, platform, p
 	}
 	defer os.RemoveAll(attemptDir)
 	manifest := filepath.Join(attemptDir, "completed.txt")
-	args := ytDlpArgs(mediaURL, filepath.Join(attemptDir, "video.%(ext)s"), manifest, playerClient)
+	args := ytDlpArgs(mediaURL, filepath.Join(attemptDir, "video.%(ext)s"), manifest, platform, playerClient)
 	output, runErr := runner(ctx, ytDlpExecutable(), args)
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -247,6 +252,12 @@ func DownloadYouTubeVideo(ctx context.Context, mediaURL string, userID int64) (s
 		return "", err
 	}
 	return downloadYouTube(ctx, mediaURL, outputPath, runYtDlp)
+}
+
+func downloadFacebookYtDlp(ctx context.Context, mediaURL, outputPath string, runner ytDlpRunner) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	return downloadYtDlpAttempt(ctx, mediaURL, outputPath, "Facebook", "", runner)
 }
 
 func DownloadTikTokVideo(ctx context.Context, mediaURL string, userID int64) (string, error) {

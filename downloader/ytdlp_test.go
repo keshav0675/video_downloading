@@ -157,6 +157,70 @@ func TestPermanentYouTubeErrorsDoNotRetry(t *testing.T) {
 	}
 }
 
+func TestFacebookFallbackDownload(t *testing.T) {
+	mediaURL := "https://www.facebook.com/100068326152285/videos/1438457594815733/?__so__=discover"
+	outputPath := filepath.Join(t.TempDir(), "facebook.mp4")
+	calls := 0
+	runner := func(ctx context.Context, _ string, args []string) (string, error) {
+		calls++
+		if args[len(args)-1] != mediaURL || args[len(args)-2] != "--" {
+			t.Fatalf("Facebook URL was not passed intact: %v", args)
+		}
+		if strings.Contains(strings.Join(args, " "), "--cookies") {
+			t.Fatal("Facebook fallback must not require cookies")
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 90*time.Second {
+			t.Fatal("Facebook fallback is missing its time limit")
+		}
+		if !strings.Contains(argValue(args, "--format"), "b[ext=mp4][height<=?1080]") {
+			t.Fatal("Facebook progressive streams without a height would be rejected")
+		}
+		writeCompletedFixture(t, args)
+		return "", nil
+	}
+	path, err := downloadFacebookYtDlp(context.Background(), mediaURL, outputPath, runner)
+	if err != nil || path != outputPath || calls != 1 {
+		t.Fatalf("Facebook fallback = %q, %v; calls = %d", path, err, calls)
+	}
+	entries, err := os.ReadDir(filepath.Dir(outputPath))
+	if err != nil || len(entries) != 1 || entries[0].Name() != "facebook.mp4" {
+		t.Fatalf("unexpected completed files: %v, %v", entries, err)
+	}
+}
+
+func TestFacebookFallbackFailureDoesNotReturnPartialVideo(t *testing.T) {
+	dir := t.TempDir()
+	runner := func(_ context.Context, _ string, args []string) (string, error) {
+		writeCompletedFixture(t, args)
+		return "ERROR: Private video", errors.New("exit 1")
+	}
+	path, err := downloadFacebookYtDlp(context.Background(), "https://www.facebook.com/reel/123/", filepath.Join(dir, "result.mp4"), runner)
+	if err == nil || path != "" || retryableDownload(err) {
+		t.Fatalf("Facebook restricted video = %q, %v", path, err)
+	}
+	files, _ := os.ReadDir(dir)
+	if len(files) != 0 {
+		t.Fatalf("failed Facebook attempt left files: %v", files)
+	}
+}
+
+func TestLiveFacebookFallback(t *testing.T) {
+	mediaURL := os.Getenv("TEST_FACEBOOK_URL")
+	if mediaURL == "" {
+		t.Skip("set TEST_FACEBOOK_URL to test the direct Facebook fallback")
+	}
+	path, err := downloadFacebookYtDlp(context.Background(), mediaURL, filepath.Join(t.TempDir(), "facebook.mp4"), runYtDlp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Facebook fallback downloaded %d bytes without uploaded cookies", info.Size())
+}
+
 func TestFailedDownloadNeverReturnsOldOrPartialFile(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.mp4")
