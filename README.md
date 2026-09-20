@@ -114,7 +114,7 @@ Alternatively follow the provider's [native setup instructions](https://github.c
 
 ### Cookie-free downloading and remaining restrictions
 
-The bot does not read browser cookies or a cookies file. It ignores global yt-dlp configuration so account settings cannot be inherited accidentally. The helper generates temporary anonymous playback tokens automatically. YouTube first uses yt-dlp's current default clients, then retries with the mobile web client. TikTok tries direct extraction, TikWM, then the older website fallbacks. TikWM receives the public TikTok URL.
+The bot does not read browser cookies or a cookies file. It ignores global yt-dlp configuration so account settings cannot be inherited accidentally. The helper generates temporary anonymous playback tokens automatically. YouTube first uses yt-dlp's current default clients, then retries with the mobile web client and `fetch_pot=always` to request both player and media tokens. This avoids relying only on a media token after an initial playback request has already been rejected. TikTok tries direct extraction, TikWM, then the older website fallbacks. TikWM receives the public TikTok URL.
 
 This supports public videos but cannot guarantee access from an IP address blocked by YouTube/TikTok or to private, members-only, age-restricted, deleted, or region-restricted content. A blocked server connection may require a working operator-supplied `YTDLP_PROXY`; merely changing the link or retrying indefinitely cannot guarantee a fix. No proxy is supplied or purchased by the bot.
 
@@ -181,6 +181,12 @@ TEST_YOUTUBE_SHORTS_URL='https://youtube.com/shorts/VIDEO_ID' \
 TEST_TIKTOK_URL='https://www.tiktok.com/@user/video/ID' \
 go test ./downloader -run TestLiveDownloads -v -count=1
 ```
+
+To exercise the mobile-web token fallback even on a connection where the default
+download works, run `go test ./downloader -run TestLiveYouTubeTokenFallback -v -count=1`
+with `TEST_YOUTUBE_SHORTS_URL` set and the local token helper running. This forces a
+simulated failure of the primary method, then performs a real fallback download;
+it does not reproduce or prove removal of an AWS IP restriction.
 
 ## License
 

@@ -121,7 +121,14 @@ func ytDlpArgs(mediaURL, template, manifest, playerClient string) []string {
 		args = append(args, "--proxy", proxy)
 	}
 	if playerClient != "" {
-		args = append(args, "--extractor-args", "youtube:player_client="+playerClient)
+		extractorArgs := "youtube:player_client=" + playerClient
+		if playerClient == "mweb" {
+			// The default "auto" policy can skip the PLAYER token and only
+			// request a GVS token after playback metadata succeeds. On a
+			// challenged connection, request tokens for both stages.
+			extractorArgs += ";fetch_pot=always"
+		}
+		args = append(args, "--extractor-args", extractorArgs)
 	}
 	if provider := strings.TrimSpace(os.Getenv("YTDLP_POT_BASE_URL")); provider != "" {
 		args = append(args, "--extractor-args", "youtubepot-bgutilhttp:base_url="+provider)
@@ -211,7 +218,7 @@ func downloadYtDlpAttempt(ctx context.Context, mediaURL, outputPath, platform, p
 func downloadYouTube(ctx context.Context, mediaURL, outputPath string, runner ytDlpRunner) (string, error) {
 	var lastErr error
 	// Let current yt-dlp choose its defaults, then try the mobile web client
-	// with tokens supplied automatically by the installed bgutil provider.
+	// with player and media tokens supplied by the installed bgutil provider.
 	for _, client := range []string{"", "mweb"} {
 		attemptCtx, cancel := context.WithTimeout(ctx, 80*time.Second)
 		path, err := downloadYtDlpAttempt(attemptCtx, mediaURL, outputPath, "YouTube", client, runner)

@@ -83,7 +83,7 @@ func TestYouTubeRetriesBotCheckWithoutCookies(t *testing.T) {
 		if calls == 1 {
 			return "ERROR: Sign in to confirm you're not a bot", errors.New("exit 1")
 		}
-		if !strings.Contains(joined, "youtube:player_client=mweb") || !strings.Contains(joined, "youtubepot-bgutilhttp:base_url=") {
+		if !strings.Contains(joined, "youtube:player_client=mweb;fetch_pot=always") || !strings.Contains(joined, "youtubepot-bgutilhttp:base_url=") {
 			t.Fatal("token-provider retry was not configured")
 		}
 		writeCompletedFixture(t, args)
@@ -101,6 +101,44 @@ func TestYouTubeRetriesBotCheckWithoutCookies(t *testing.T) {
 	if len(files) != 2 {
 		t.Fatalf("attempt files were not cleaned up: %v", files)
 	}
+}
+
+func TestLiveYouTubeTokenFallback(t *testing.T) {
+	mediaURL := os.Getenv("TEST_YOUTUBE_SHORTS_URL")
+	if mediaURL == "" {
+		t.Skip("set TEST_YOUTUBE_SHORTS_URL to test the live token-provider fallback")
+	}
+	mediaURL, err := normalizeShortsURL(mediaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	calls := 0
+	runner := func(ctx context.Context, executable string, args []string) (string, error) {
+		calls++
+		if calls == 1 {
+			// Force the fallback; the local IP may not receive an actual bot check.
+			return "ERROR: Sign in to confirm you're not a bot", errors.New("simulated primary failure")
+		}
+		output, err := runYtDlp(ctx, executable, args)
+		if err == nil && !strings.Contains(output, "Generating a player PO Token for mweb") {
+			t.Error("the fallback did not request a player token from the installed provider")
+		}
+		return output, err
+	}
+	path, err := downloadYouTube(ctx, mediaURL, filepath.Join(t.TempDir(), "short.mp4"), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected token fallback, got %d attempts", calls)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Token-provider fallback downloaded %d bytes without uploaded cookies", info.Size())
 }
 
 func TestPermanentYouTubeErrorsDoNotRetry(t *testing.T) {
